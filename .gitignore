@@ -1,0 +1,5 @@
+/.idea/
+/coverage.out
+*.test
+*.exe
+.DS_Store
