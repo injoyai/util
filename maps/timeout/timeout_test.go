@@ -8,7 +8,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	x := NewGeneric[int]().SetTimeout(time.Millisecond).SetInterval(time.Millisecond)
+	x := New[int](time.Millisecond, time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	expired := make(chan int, 1)
@@ -32,7 +32,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestHeartbeatDuringCallback(t *testing.T) {
-	x := NewGeneric[int]().SetTimeout(time.Nanosecond).SetInterval(time.Millisecond)
+	x := New[int](time.Nanosecond, time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	x.SetDealFunc(func(key int) error { x.Keep(key); cancel(); return nil })
@@ -49,7 +49,7 @@ func TestHeartbeatDuringCallback(t *testing.T) {
 func TestStaleTimeoutSnapshotIsRechecked(t *testing.T) {
 	for _, change := range []string{"heartbeat", "delete", "timeout"} {
 		t.Run(change, func(t *testing.T) {
-			x := NewGeneric[int]().SetTimeout(time.Hour).SetInterval(time.Millisecond)
+			x := New[int](time.Hour, time.Millisecond)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})

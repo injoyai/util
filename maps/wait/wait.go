@@ -8,13 +8,18 @@ import (
 	"time"
 )
 
-func NewGeneric[K comparable, V any](timeout time.Duration) *Generic[K, V] {
-	return &Generic[K, V]{m: make(map[K]*pending[V]), timeout: timeout}
+// Default 创建 key 和响应值均为 any 的独立等待器，默认等待超时为 10 秒。
+func Default() *Waiter[any, any] { return New[any, any](10 * time.Second) }
+
+// New 创建按 key 关联请求与响应的等待器。
+func New[K comparable, V any](timeout time.Duration) *Waiter[K, V] {
+	return &Waiter[K, V]{m: make(map[K]*pending[V]), timeout: timeout}
 }
 
-// Generic 必须通过 NewGeneric 创建。同步超时包含排队时间；异步回调在 Done
-// 的调用方执行且可重入。多个 Done 可并发执行回调，回调须自行同步共享状态。
-type Generic[K comparable, V any] struct {
+// Waiter 按 key 管理响应等待与回调，必须通过 New 或 Default 创建。
+// 同步超时包含排队时间；异步回调在 Done 的调用方执行且可重入。
+// 多个 Done 可并发执行回调，回调须自行同步共享状态。
+type Waiter[K comparable, V any] struct {
 	mu      sync.RWMutex
 	m       map[K]*pending[V]
 	timeout time.Duration
@@ -22,34 +27,34 @@ type Generic[K comparable, V any] struct {
 	closed  bool
 }
 
-func (this *Generic[K, V]) SetReuse(b ...bool) *Generic[K, V] {
+func (this *Waiter[K, V]) SetReuse(b ...bool) *Waiter[K, V] {
 	this.mu.Lock()
 	this.reuse = len(b) == 0 || b[0]
 	this.mu.Unlock()
 	return this
 }
 
-func (this *Generic[K, V]) SetTimeout(timeout time.Duration) *Generic[K, V] {
+func (this *Waiter[K, V]) SetTimeout(timeout time.Duration) *Waiter[K, V] {
 	this.mu.Lock()
 	this.timeout = timeout
 	this.mu.Unlock()
 	return this
 }
 
-func (this *Generic[K, V]) IsWait(key K) bool {
+func (this *Waiter[K, V]) IsWait(key K) bool {
 	this.mu.RLock()
 	defer this.mu.RUnlock()
 	_, ok := this.m[key]
 	return ok
 }
 
-func (this *Generic[K, V]) Wait(key K, timeouts ...time.Duration) (V, error) {
+func (this *Waiter[K, V]) Wait(key K, timeouts ...time.Duration) (V, error) {
 	return this.Sync(key, timeouts...)
 }
 
 // Sync waits for one response. With reuse enabled, the next response is shared.
 // The timeout includes time spent queued behind earlier waiters.
-func (this *Generic[K, V]) Sync(key K, timeouts ...time.Duration) (V, error) {
+func (this *Waiter[K, V]) Sync(key K, timeouts ...time.Duration) (V, error) {
 	this.mu.Lock()
 	if this.closed {
 		this.mu.Unlock()
@@ -99,7 +104,7 @@ func (this *Generic[K, V]) Sync(key K, timeouts ...time.Duration) (V, error) {
 
 // Async 注册回调。num>0 表示次数，num<0 表示无限次，num=0 不注册。
 // timeout<=0 表示不自动过期；Close 会清理注册和定时器。
-func (this *Generic[K, V]) Async(key K, fn Handler[V], num int, timeouts ...time.Duration) {
+func (this *Waiter[K, V]) Async(key K, fn Handler[V], num int, timeouts ...time.Duration) {
 	if num == 0 || fn == nil {
 		return
 	}
@@ -136,7 +141,7 @@ func (this *Generic[K, V]) Async(key K, fn Handler[V], num int, timeouts ...time
 	this.mu.Unlock()
 }
 
-func (this *Generic[K, V]) Done(key K, value V, errs ...error) bool {
+func (this *Waiter[K, V]) Done(key K, value V, errs ...error) bool {
 	var err error
 	if len(errs) > 0 {
 		err = errs[0]
@@ -199,7 +204,7 @@ func (this *Generic[K, V]) Done(key K, value V, errs ...error) bool {
 	return delivered
 }
 
-func (this *Generic[K, V]) pending(key K) *pending[V] {
+func (this *Waiter[K, V]) pending(key K) *pending[V] {
 	p := this.m[key]
 	if p == nil {
 		p = &pending[V]{}
@@ -208,7 +213,7 @@ func (this *Generic[K, V]) pending(key K) *pending[V] {
 	return p
 }
 
-func (this *Generic[K, V]) removeEmpty(key K, p *pending[V]) {
+func (this *Waiter[K, V]) removeEmpty(key K, p *pending[V]) {
 	if len(p.waiters) == 0 && len(p.callbacks) == 0 {
 		delete(this.m, key)
 	}
@@ -239,7 +244,7 @@ var ErrClosed = errors.New("wait: closed")
 
 // Close 唤醒同步等待者并停止回调定时器，不执行尚未触发的异步回调。
 // 已被 Done 取出的回调可以继续执行；需要等待它们时由调用方同步。
-func (this *Generic[K, V]) Close() error {
+func (this *Waiter[K, V]) Close() error {
 	this.mu.Lock()
 	defer this.mu.Unlock()
 	this.closed = true

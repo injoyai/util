@@ -9,7 +9,7 @@ import (
 )
 
 func TestMapAtomicOperationsAndCallbacks(t *testing.T) {
-	m := maps.NewGeneric[string, int]()
+	m := maps.New[string, int]()
 	defer m.Close()
 	var wg sync.WaitGroup
 	results := make(chan int, 100)
@@ -65,7 +65,7 @@ func TestMapAtomicOperationsAndCallbacks(t *testing.T) {
 	}
 }
 func TestMapHandlerSingleExecutionAndExpiration(t *testing.T) {
-	m := maps.NewGeneric[int, int]()
+	m := maps.New[int, int]()
 	defer m.Close()
 	var wg sync.WaitGroup
 	var calls int32
@@ -126,7 +126,7 @@ func TestMapHandlerSingleExecutionAndExpiration(t *testing.T) {
 }
 
 func TestGetOrSetByHandler(t *testing.T) {
-	m := maps.NewGeneric[string, int]()
+	m := maps.New[string, int]()
 	defer m.Close()
 	if got := m.GetOrSetByHandler("missing", nil); got != 0 || m.Has("missing") {
 		t.Fatal("nil factory should only read", got)
@@ -163,23 +163,23 @@ func TestGetOrSetByHandler(t *testing.T) {
 }
 
 func TestComputedValueSurvivesImmediateExpiration(t *testing.T) {
-	for name, call := range map[string]func(*maps.Generic[string, int]) (int, error){
-		"value": func(m *maps.Generic[string, int]) (int, error) {
+	for name, call := range map[string]func(*maps.Map[string, int]) (int, error){
+		"value": func(m *maps.Map[string, int]) (int, error) {
 			value, loaded := m.GetOrSet("x", 42, time.Nanosecond)
 			if loaded {
 				t.Error("new value reported as cached")
 			}
 			return value, nil
 		},
-		"handler": func(m *maps.Generic[string, int]) (int, error) {
+		"handler": func(m *maps.Map[string, int]) (int, error) {
 			return m.GetOrSetByHandler("x", func() int { return 42 }, time.Nanosecond), nil
 		},
-		"handler2": func(m *maps.Generic[string, int]) (int, error) {
+		"handler2": func(m *maps.Map[string, int]) (int, error) {
 			return m.GetOrSetByHandler2("x", func() (int, error) { return 42, nil }, time.Nanosecond)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			m := maps.NewGeneric[string, int]()
+			m := maps.New[string, int]()
 			defer m.Close()
 			m.OnSet(func(_ string, value int) {
 				if value != 42 {
@@ -220,7 +220,7 @@ func TestBitConcurrentGroups(t *testing.T) {
 }
 
 func TestMapLifecycle(t *testing.T) {
-	m := maps.NewGeneric[string, int]()
+	m := maps.New[string, int]()
 	m.Set("x", 7)
 	m.RunClear(time.Millisecond)
 	m.Close()

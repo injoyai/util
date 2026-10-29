@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func waitRegistered[K comparable, V any](t *testing.T, x *Generic[K, V], key K) {
+func waitRegistered[K comparable, V any](t *testing.T, x *Waiter[K, V], key K) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for !x.IsWait(key) {
@@ -19,7 +19,7 @@ func waitRegistered[K comparable, V any](t *testing.T, x *Generic[K, V], key K) 
 }
 
 func TestNew2(t *testing.T) {
-	x := NewGeneric[string, int](time.Second)
+	x := New[string, int](time.Second)
 	for i := 0; i < 3; i++ {
 		result := make(chan int, 1)
 		go func() { v, _ := x.Wait("key"); result <- v }()
@@ -31,7 +31,7 @@ func TestNew2(t *testing.T) {
 }
 
 func TestNew(t *testing.T) {
-	x := NewGeneric[string, int](time.Second).SetReuse(true)
+	x := New[string, int](time.Second).SetReuse(true)
 	result := make(chan int, 2)
 	for i := 0; i < 2; i++ {
 		go func() { v, _ := x.Wait("key"); result <- v }()
@@ -60,7 +60,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestErr(t *testing.T) {
-	x := NewGeneric[string, int](time.Second)
+	x := New[string, int](time.Second)
 	expected := errors.New("response failed")
 	result := make(chan error, 1)
 	go func() { _, err := x.Wait("key"); result <- err }()
@@ -72,7 +72,7 @@ func TestErr(t *testing.T) {
 }
 
 func TestAsyncLifetime(t *testing.T) {
-	x := NewGeneric[string, int](time.Second)
+	x := New[string, int](time.Second)
 	count := 0
 	x.Async("finite", func(int, error) { count++ }, 2)
 	if !x.Done("finite", 1) || !x.Done("finite", 2) || x.Done("finite", 3) || count != 2 {
@@ -101,7 +101,7 @@ func TestAsyncLifetime(t *testing.T) {
 }
 
 func TestAsyncReentrant(t *testing.T) {
-	x := NewGeneric[int, int](time.Second)
+	x := New[int, int](time.Second)
 	calls := 0
 	x.Async(1, func(int, error) {
 		calls++
@@ -115,7 +115,7 @@ func TestAsyncReentrant(t *testing.T) {
 }
 
 func TestSyncTimeoutCleanup(t *testing.T) {
-	x := NewGeneric[int, int](time.Second)
+	x := New[int, int](time.Second)
 	for _, timeout := range []time.Duration{0, time.Millisecond} {
 		if _, err := x.Sync(1, timeout); err == nil || x.IsWait(1) {
 			t.Fatal("timed-out waiter retained", err)
@@ -124,7 +124,7 @@ func TestSyncTimeoutCleanup(t *testing.T) {
 }
 
 func TestQueuedResponsesInOrder(t *testing.T) {
-	x := NewGeneric[int, int](time.Second)
+	x := New[int, int](time.Second)
 	first, second := make(chan int, 1), make(chan int, 1)
 	go func() { v, _ := x.Sync(1); first <- v }()
 	waitRegistered(t, x, 1)
@@ -154,7 +154,7 @@ func TestQueuedResponsesInOrder(t *testing.T) {
 }
 
 func TestCloseReleasesAndClears(t *testing.T) {
-	x := NewGeneric[int, int](time.Hour)
+	x := New[int, int](time.Hour)
 	result := make(chan error, 1)
 	go func() { _, err := x.Sync(1); result <- err }()
 	waitRegistered(t, x, 1)

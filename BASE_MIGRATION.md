@@ -8,15 +8,15 @@
 
 | base | util | 行为与接入变化 | 去除或未迁入的内容 |
 | --- | --- | --- | --- |
-| `maps.NewGeneric[K,V]` | `maps.NewGeneric[K,V]` | 保留 `Get/Set/Has/Del`、TTL、`GetAndDel/GetAndSet/GetOrSet`、按 key 去重的 `GetOrSetByHandler/GetOrSetByHandler2`、快照 `Range/Map`、`Clone`、过期清理及事件 | `Exist`、`MustGet`、`GetVar`、`GMap`、`conv.Extend` 隐式转换；对外的 `WithMutex`、`Value/NewValue` 包装 |
+| `maps.Generic[K,V]`、`maps.NewGeneric[K,V]` | `maps.Map[K,V]`、`maps.New[K,V]` | 类型与构造函数更名，不保留旧入口；保留 `Get/Set/Has/Del`、TTL、`GetAndDel/GetAndSet/GetOrSet`、按 key 去重的 `GetOrSetByHandler/GetOrSetByHandler2`、快照 `Range/Map`、`Clone`、过期清理及事件 | `Exist`、`MustGet`、`GetVar`、`GMap`、`conv.Extend` 隐式转换；对外的 `WithMutex`、`Value/NewValue` 包装 |
 | `maps.GetOrSetByHandler` | `maps.GetOrSetByHandler2` | 接受 `func() (V, error)`，返回 `(V, error)`；后缀 2 表示两个返回值 | 无；仅改名为双返回值版本 |
 | `maps.GetOrSetByHandler2` | `maps.GetOrSetByHandler` | 接受 `func() V`，直接返回 V；复用带 error 版本的缓存、过期和按 key 加锁逻辑；nil 工厂仅读取缓存，缺失返回零值 | 无；仅改名为单返回值版本 |
 | `maps.Subscribe/Chan` | `maps.Subscribe(key, capacity)` | 返回 `(*chans.Safe[V], error)`；只保留 Subscribe 名称；通知满时丢弃新消息 | `Chan` 方法别名；省略容量的可选参数形式 |
 | `maps.RunClear/Close` | 同名接口 | Close 取消并等待自动清理退出，关闭订阅但保留数据；关闭后不重启清理，仍可访问 Map，后续新订阅立即关闭 | 无；保留原有公开接口 |
 | `maps.NewBit` | 零值可用的 `maps.Bit` | `Set` 不返回重试次数耗尽错误；`Del` 清位但保留分组，避免并发删除分组时丢失其他置位 | `NewBit` 构造器、旧 `Bit` 接口、`Set` 的 error 返回值，以及清空分组时自动删除分组的行为 |
-| `maps/wait.NewGeneric` | `maps/wait.NewGeneric` | 保留 `Wait/Sync/Async/Done/IsWait/SetTimeout/SetReuse`，移除可变全局默认实例和无效的 SetClearNum；增加 Close | 包级 `Default/Wait/Sync/Async/Done/SetTimeout/SetReuse/IsWait`、无类型 `New/Entity` 和无效的 `SetClearNum` |
+| `maps/wait.Generic`、`maps/wait.NewGeneric` | `wait.Waiter[K,V]`、`wait.New[K,V]` | 类型与构造函数更名，不保留旧入口；保留 `Wait/Sync/Async/Done/IsWait/SetTimeout/SetReuse`，移除可变全局默认实例和无效的 SetClearNum；增加 Close；`Default()` 每次创建独立实例，默认等待超时为 10 秒 | 可变全局 `Default` 实例、包级 `Wait/Sync/Async/Done/SetTimeout/SetReuse/IsWait`、无类型 `New/Entity` 和无效的 `SetClearNum` |
 | `maps/keep.New` | `maps/keep.New` | 保留最近六次心跳及锁外回调，增加 Del；Keeping 的次数必须为 1～6，历史不足返回 false | `Keeper` 聚合接口；次数超出 1～6 时不再沿用旧的截断或空循环判断 |
-| `maps/timeout.NewGeneric` | 同名接口 | 保留 Keep/Del、超时配置、错误后重试以及 `Run(ctx)`；Run 的协程与等待由调用方管理 | 无；保留原有公开接口 |
+| `maps/timeout.Generic`、`maps/timeout.NewGeneric` | `timeout.Timeout[K]`、`timeout.New[K](timeout, interval)` | 类型与构造函数更名，不保留旧入口；保留 Keep/Del、超时配置、错误后重试以及 `Run(ctx)`；Run 的协程与等待由调用方管理 | 非泛型 `Timeout` 别名和旧 `New()` 入口；无需指定 key 类型时使用 `Default()` |
 | `safe.Closer` | `safe.Closer` | 保留 `NewCloser/NewCloserErr`、`Done/Err/Closed`、`Close/CloseWithErr`、`SetCloseFunc/Reset` 全部接口，适合嵌入资源对象；关闭回调在锁外执行 | 无；保留原有公开接口和行为 |
 | `chans.NewSafe`、`safe.NewChan` 的安全关闭意图 | `chans.NewSafe[T](capacity)` | 返回对象和 error；发送用 Send(ctx, value)、Add、Try、Timeout；Chan 只读，Close 解除阻塞发送并关闭接收端；不嵌入可重置 Closer | `Must` 发送捷径、公开可写的 `Chan/C`；`SetCloseFunc/Reset/Err/CloseWithErr` 从通道对象移除，独立的 safe.Closer 仍完整提供 |
 | `chans.NewSubscribe` | `chans.NewSubscribe` | Subscribe(topic, capacity) 返回对象和 error；Publish(topic, value, timeout) 显式指定每个接收者的超时；Close 解除阻塞发布 | `Publish` 的隐式默认超时、`Subscribe` 的可选容量参数形式；方法本身保留 |
@@ -32,7 +32,13 @@ Map 的 Range 在锁外遍历结构快照，元素内部的指针不做深拷贝
 
 Map 的过期时间不大于零表示永久。GetOrSet 及两个 handler 版本返回本次选定或生成的值，即使返回前已过期也不返回零值；TTL 影响之后的缓存读取。事件回调在锁外同步调用，不保证并发操作的回调顺序；回调负责自身同步。Close 只管理清理协程与订阅，不等待调用方正在执行的 Map 方法。后台自动清理至多启动一次。
 
-Wait 的 Sync 非正超时立即返回 `context.DeadlineExceeded`，超时包含同 key 排队；SetReuse 只影响之后注册的同步等待者。Async 的 num 为正时限制次数，为负时持续注册，为零或 nil 回调时不注册；非正超时表示不自动过期。回调在 Done 调用方的锁外执行，多个 Done 可并发执行回调。Close 唤醒同步等待者并返回 ErrClosed、停止回调定时器，但不等待已经被 Done 取出的回调。
+`wait` 和 `timeout` 的导入路径仍分别为 `github.com/injoyai/util/maps/wait` 和 `github.com/injoyai/util/maps/timeout`。原 `timeout.New()` 改为 `timeout.Default()` 或 `timeout.New[any](time.Minute, 10*time.Second)`，原 `*timeout.Timeout` 改为 `*timeout.Timeout[any]`；使用明确 key 类型时，将 `any` 换成实际类型。
+
+`maps.Default()`、`wait.Default()` 和 `timeout.Default()` 分别等价于 `maps.New[any,any]()`、`wait.New[any,any](10*time.Second)` 和 `timeout.New[any](time.Minute, 10*time.Second)`。每次调用创建独立实例，不共享全局状态；key 的动态类型仍必须可比较。
+
+`timeout.New[K](timeout, interval)` 依次接收超时时长和检查间隔，`timeout.Default()` 无需参数，使用 1 分钟超时和 10 秒检查间隔。检查间隔非正时使用 10 秒，超时时长非正时在下次检查中视为超时；构造后仍可用 `SetTimeout`、`SetInterval` 调整配置。
+
+`wait.Waiter` 的 Sync 非正超时立即返回 `context.DeadlineExceeded`，超时包含同 key 排队；SetReuse 只影响之后注册的同步等待者。Async 的 num 为正时限制次数，为负时持续注册，为零或 nil 回调时不注册；非正超时表示不自动过期。回调在 Done 调用方的锁外执行，多个 Done 可并发执行回调。Close 唤醒同步等待者并返回 ErrClosed、停止回调定时器，但不等待已经被 Done 取出的回调。
 
 Safe 的 Add 未传超时或超时为负时阻塞，零为尝试发送，正值限制等待。Send 接受 context，关闭返回 io.ErrClosedPipe。发送、关闭或取消同时发生时可能完成发送；Close 返回后新发送一定失败，已有缓冲仍可读取。接收方不能自行 close Chan。QueueCover 关闭后 Append 返回 false。
 
@@ -80,7 +86,7 @@ Bit 的分组在清位后保留，适用于键空间相对稳定的状态标志�
 | `crypt/aes` 的 CBC/ECB/PKCS7、`crypt/des` | 旧密文兼容和 IV/填充语义需要由应用确定；本次不复制默认 IV、旧格式和无认证加密接口，不自动转换或重写已有密文 |
 | `safe.Rerun` 的 Dial/Run/Close 重连流程 | 外部连接与关闭责任由具体客户端管理；可组合 task.Runner/Retry，但不是等价的只改 import 替换 |
 | `chans.Entity/QueueFunc/Trunk/Coroutine` 的动态 worker、回调总线及配置接口；Order 的可动态扩展循环执行 API | task.Map 覆盖有限批量并发，chans.Subscribe 覆盖按主题广播；动态调整 worker 数、循环轮转、任务编号和每个回调的调度契约未直接搬入，旧调用方保留原实现 |
-| `maps` 的 conv.Extend/GetVar/GMap、无类型默认实例、MustGet、WithMutex/Value 对外包装 | 移除隐式转换与重复入口；使用类型明确的 Generic.Get、GetOrSetByHandler/GetOrSetByHandler2、Map；普通原生 Map 快照可交给调用方做显式转换 |
+| `maps` 的 conv.Extend/GetVar/GMap、无类型默认实例、MustGet、WithMutex/Value 对外包装 | 移除隐式转换与重复入口；使用类型明确的 Map.Get、GetOrSetByHandler/GetOrSetByHandler2、Map；普通原生 Map 快照可交给调用方做显式转换 |
 | 捕获并吞掉 panic 的 Recover/Try 与无效兼容参数 | util 保留 Go 的 panic 语义；调用方在真正需要隔离的边界自行定义错误策略 |
 
 这些范围没有从旧仓库删除，其他项目的 go.mod、导入和业务数据均未修改。接入时应按接口逐项迁移，不应全局替换 `github.com/injoyai/base` 前缀。

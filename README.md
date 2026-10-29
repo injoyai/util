@@ -1,219 +1,227 @@
 # util
 
-从 `github.com/injoyai/goutil` 和 `github.com/injoyai/base` 筛选、整理的通用 Go 工具库。核心模块按功能独立分包，仅依赖标准库，最低 Go 1.25。模块名沿用旧项目的作者命名：`github.com/injoyai/util`。
+按需引入的 Go 通用工具库，提供文件操作、缓存、并发任务、HTTP、字符串和时间处理等能力。
 
-迁移保留功能意图，不维持旧 API 兼容性。旧项目未修改；goutil 的取舍见 [MIGRATION.md](MIGRATION.md)，base 的完整范围与 API 对照见 [BASE_MIGRATION.md](BASE_MIGRATION.md)。本目录尚未发布，使用其他项目时可先通过本地 `replace` 引用。
+- **Go 1.25+**，核心模块仅依赖标准库。
+- 各功能独立分包，直接导入 `github.com/injoyai/util/<包名>`。
+- SQLite 时序存储作为[独立子模块](sqlitets/README.md)提供，按需接入。
 
-| 包 | 功能 |
-| --- | --- |
-| `str` | Unicode 反转、截断、分段、裁剪、无共享随机源的随机字符串 |
-| `sn` | 自动读取 Linux、macOS、Windows 硬件标识，生成 16 字符序列号 |
-| `slice` | 泛型去重、交集、负索引、基于 offset 的分页 |
-| `times` | 保留时区的秒、分钟、小时、日、周、月、季度、年边界 |
-| `cache` | 泛型环形缓存、JSON 文件缓存，支持同一实例并发使用 |
-| `maps` | 泛型并发 Map、过期、原子操作、快照、事件与订阅、稀疏位图 |
-| `maps/wait` | 按 key 排队等待或共享响应，有限次数回调及关闭清理 |
-| `maps/keep`、`maps/timeout` | 连续心跳检查、可取消的超时处理循环 |
-| `chans` | 安全关闭通道、主题订阅、消息内存流、覆盖队列、一次性结果 |
-| `safe` | 可重置的关闭状态、关闭原因、通知通道及关闭回调管理 |
-| `pool` | 有界闲置对象复用池 |
-| `crc` | CRC-8/CRC-16 参数表、校验与增量计算 |
-| `oss` | 用户数据目录、一步建目录/新建或覆盖文件、临时文件替换、流式复制、JSON 保存 |
-| `bytesize` | 1024 进制大小解析、格式化、每秒速率 |
-| `csv` | UTF-8 BOM 识别、CSV 流式读取、正确检查写入及 Flush 错误 |
-| `archive` | ZIP 打包/解压、tar.gz 解压、gzip 流式编解码 |
-| `httputil` | JSON 请求、流式下载、上下文取消、非 2xx 错误、大小限制 |
-| `netutil` | IPv4 端点解析、本机 IPv4、明确代理信任规则的客户端 IP |
-| `task` | 可取消重试、有限并发批量任务、可重启任务及取消前次执行的单任务管理 |
-| `geo` | 点到点距离、线段相交、简单多边形包含和相交 |
+## 接入
 
-## SQLite 时序存储子模块
+目前尚未发布版本，可在使用它的 Go 项目中通过本地 `replace` 引用。将下方路径替换为本仓库的实际绝对路径：
 
-[`sqlitets`](sqlitets/README.md) 是独立 Go 子模块 `github.com/injoyai/util/sqlitets`，提供 JSON 字段时序存储、UTC 月分库、跨月查询、过滤、分页、聚合和过期清理。它保留自己的 `go.mod`、`go.sum` 和 SQLite 驱动依赖，核心模块不依赖它。
-
-使用时引入 `github.com/injoyai/util/sqlitets` 和 `github.com/injoyai/util/sqlitets/sqlite`；共享月分库管理器位于 `github.com/injoyai/util/sqlitets/monthly`。本地引用需单独将子模块路径 replace 到本项目的 `sqlitets` 目录，完整示例见子模块 README。
-
-## 使用
-
-只引入所需的包，标准库已有的功能直接使用标准库。
-
-## base 迁入能力
-
-并发 Map 与文件缓存各自独立：`maps` 存储内存中的原始类型值，支持 TTL 与原子操作；`cache.File` 负责 JSON 编码与显式保存。
-
-```go
-m := maps.NewGeneric[string, int]()
-defer m.Close() // 停止自动清理并关闭订阅，保留已有值。
-m.Set("count", 1, time.Minute)
-value, exists := m.Get("count")
-
-sub, err := m.Subscribe("count", 8)
-if err != nil {
-    return err
-}
-defer sub.Close()
-m.Set("count", 2)
-next := <-sub.Chan // 只读通道；Map 订阅满时丢弃新通知。
+```sh
+go mod edit -require=github.com/injoyai/util@v0.0.0
+go mod edit -replace=github.com/injoyai/util=/absolute/path/to/util
 ```
 
-`chans.NewSafe`、`NewIO`、`NewQueueCover`、`pool.New`、`task.NewRunner`、`task.NewOneRun` 返回 `(对象, error)`。任务的 `Stop()` 取消并等待退出，处理函数必须响应上下文，且不得在处理函数内部调用同一实例的 `Stop()`。
+添加所需包的 `import` 后执行 `go mod tidy`。`v0.0.0` 在这里仅用于本地引用，不代表已发布的版本。
 
-```go
-r, err := task.NewRunner(func(ctx context.Context) error {
-    <-ctx.Done()
-    return ctx.Err()
-})
-if err != nil {
-    return err
-}
-if err := r.Start(ctx); err != nil {
-    return err
-}
-r.Stop()
-err = r.Err() // 获取本轮执行结果。
-```
+## 快速开始
 
-CRC 使用 `crc.Checksum16(data, crc.MakeTable16(crc.CRC16_MODBUS))`。返回数值的协议字节序由调用方用 `encoding/binary` 显式编码。CRC 算法和向量的上游归属及 MIT 许可见 `crc/LICENSE.crc8` 与 `crc/LICENSE.crc16`。
-
-`github.com/injoyai/util/safe` 保留 `Closer` 的完整接口，适合嵌入连接、连接池等资源对象：
-
-```go
-c := safe.NewCloser().SetCloseFunc(func(reason error) error {
-    return resource.Close()
-})
-err := c.CloseWithErr(reason) // 返回资源关闭回调的错误。
-cause := c.Err()             // 保存的是首次关闭原因。
-```
-
-`Done()` 在执行关闭回调前关闭，只表示已发起关闭；重复 Close 不等待回调。`CloseWithErr(nil)` 沿用旧约定，不关闭实例。`Reset()` 保留回调、创建新的通知通道；调用方必须协调旧资源及回调退出，旧 Done 通道保持关闭。
-
-## 其他能力示例
-
-使用 `github.com/injoyai/util/sn` 自动获取本机 SN，无需传参：
-
-```go
-serial, err := sn.Get()
-if err != nil {
-    return err
-}
-serial = "EDGE-" + serial // 显示前缀可自行添加
-```
-
-| 系统 | 硬件来源 |
-| --- | --- |
-| Linux | 按顺序检查 SMBIOS `product_uuid`、设备树 `serial-number`、`/proc/cpuinfo` 的 `Serial`、MMC CID，不按 CPU 架构或机型分支 |
-| macOS | 使用系统自带的 `/usr/sbin/ioreg` 读取 `IOPlatformUUID` |
-| Windows | 使用 `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` 和 CIM 读取 `Win32_ComputerSystemProduct.UUID` |
-
-Linux 仅在某来源不存在时检查后续来源；来源存在但读取失败、为空或为占位值时返回错误，不切换到其他编号。CPU 的 `Serial` 缺失视为不支持，不同 CPU Serial 同时出现视为歧义。MMC 扫描所有 host，按 `type=MMC` 排除 SD；必须恰好存在一个 MMC 设备。MMC CID 标识存储器，不能单凭该值保证对应主板或焊接式 eMMC，更换该存储器会改变 SN。
-
-UUID 去除标准连字符并统一为大写十六进制；MMC CID 固定为 32 个十六进制字符并统一大写；其他序列号保留大小写和内部分隔符。空值、全零、全 F、常见 OEM 占位值以及格式无效的 UUID/CID 会被拒绝。Windows 和 macOS 的外部命令有 10 秒超时，执行失败时返回错误；不要求安装第三方依赖。来源依据见 [Microsoft SMBIOS UUID](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-computersystemproduct)、[Apple IOPlatformUUID](https://developer.apple.com/documentation/iokit/kioplatformuuidkey)、[Linux MMC 属性](https://docs.kernel.org/driver-api/mmc/mmc-dev-attrs.html)。
-
-编码契约为 `SHA-256("sn:v1\x00" + source + "\x00" + normalizedIdentity)` 的前 8 字节，输出 16 个大写十六进制字符，由固定样例测试锁定。函数只读取硬件信息，不写文件，不使用随机值、MAC 地址或操作系统安装 ID。硬件来源与编号保持不变时，SN 保持不变；更换硬件、修改固件、改变可见硬件来源或克隆虚拟机可能影响稳定性与唯一性，不保证不同操作系统在同一设备上读取到相同身份。64 位摘要不能消除原始硬件编号重复，也不保证摘要绝对唯一。
-
-原 `sn.Derive(key)` 已替换为 `sn.Get()`，身份来源参与摘要；此前版本生成的 SN 与当前契约不兼容，已有存储和引用需要由应用制定迁移策略。
+以下示例保留最近三条记录。保存为调用项目的 `main.go`，执行 `go mod tidy` 和 `go run .`：
 
 ```go
 package main
 
 import (
     "fmt"
+    "log"
+
     "github.com/injoyai/util/cache"
 )
 
 func main() {
     recent, err := cache.NewCycle[int](3)
     if err != nil {
-        panic(err)
+        log.Fatal(err)
     }
     for _, n := range []int{1, 2, 3, 4} {
         recent.Append(n)
     }
     fmt.Println(recent.List(0)) // [2 3 4]
+    fmt.Println(recent.List(2)) // [3 4]
 }
 ```
 
-批量处理会保留结果顺序并汇总错误；处理函数需要响应上下文。
+## 功能导航
+
+| 需求 | 包 | 主要能力 |
+| --- | --- | --- |
+| 文件与目录 | [`oss`](oss) | 创建目录、创建或覆盖文件、JSON 保存、流式复制、用户数据目录 |
+| 缓存 | [`cache`](cache) | 固定容量环形缓存、显式保存的 JSON 文件缓存 |
+| 并发 Map | [`maps`](maps) | 泛型键值存储、TTL、原子操作、快照、事件订阅、稀疏位图 |
+| 任务执行 | [`task`](task) | 可取消重试、有限并发批量处理、可重启及替换任务 |
+| HTTP 请求与下载 | [`httputil`](httputil) | JSON 请求、流式下载、上下文取消、状态与大小检查 |
+| 字符串 | [`str`](str) | Unicode 反转、截断、分段、裁剪、随机字符串 |
+| 切片 | [`slice`](slice) | 泛型去重、交集、负索引、基于 offset 的分页 |
+| 日期与时间 | [`times`](times) | 保留时区的秒至年边界、季度计算 |
+| 通道与消息 | [`chans`](chans) | 安全关闭通道、主题订阅、消息内存流、覆盖队列、一次性结果 |
+| 资源关闭 | [`safe`](safe) | 关闭原因、通知通道、回调及状态重置 |
+| 对象复用 | [`pool`](pool) | 有界闲置对象复用池 |
+| 响应等待 | [`maps/wait`](maps/wait) | `wait.New[K,V]` 创建等待器，按 key 排队等待或共享响应 |
+| 心跳与超时 | [`maps/keep`](maps/keep)、[`maps/timeout`](maps/timeout) | 连续心跳检查；`timeout.New[K](timeout, interval)` 指定超时时长和检查间隔 |
+| 设备序列号 | [`sn`](sn) | 从 Linux、macOS、Windows 硬件标识生成 16 字符 SN |
+| 大小与速率 | [`bytesize`](bytesize) | 1024 进制大小解析、格式化、每秒速率 |
+| CSV | [`csv`](csv) | UTF-8 BOM 识别、流式读取、写入错误检查 |
+| 压缩与解压 | [`archive`](archive) | ZIP 打包与解压、tar.gz 解压、gzip 流式编解码 |
+| 网络地址 | [`netutil`](netutil) | IPv4 端点解析、本机 IPv4、受信代理下的客户端 IP |
+| CRC 校验 | [`crc`](crc) | CRC-8、CRC-16 参数表、校验及增量计算 |
+| 二维几何 | [`geo`](geo) | 点间距离、线段相交、简单多边形包含与相交 |
+
+无需指定类型参数时，可用 `maps.Default()`、`wait.Default()` 和 `timeout.Default()` 创建实例，key 和值的类型为 `any`。`wait.Default()` 默认等待超时为十秒。每次调用都返回独立实例；key 的实际类型必须可比较，例如字符串或整数，不能使用切片、map 或函数。
+
+`timeout.New[string](time.Minute, 10*time.Second)` 表示一分钟未收到心跳即超时，每十秒检查一次。`timeout.Default()` 使用一分钟超时、十秒检查间隔。检查间隔非正时使用十秒；超时时长非正时在下次检查中视为超时。
+
+## 常用示例
+
+以下片段省略 `package` 声明，可放入自己的包中使用。
+
+### 保存文件
+
+`oss.New(path)` 创建目录；传入内容则创建或覆盖文件，并自动创建父目录。内容支持 `string`、`[]byte`、`io.Reader`、`nil`，多段内容按顺序拼接。`oss.New(path, nil)` 会创建空文件或清空已有文件。
 
 ```go
-results, err := task.Map(ctx, inputs, 4,
-    func(ctx context.Context, input string) (string, error) {
-        if err := ctx.Err(); err != nil {
-            return "", err
-        }
-        return strings.ToUpper(input), nil
-    })
-// results[i] 对应 inputs[i]；err 可通过 errors.Is/As 检查。
-```
+import (
+    "path/filepath"
 
-HTTP 使用标准库 `http.Client` 配置代理、Transport、CookieJar、超时：
+    "github.com/injoyai/util/oss"
+)
 
-```go
-client, err := httputil.New(&http.Client{Timeout: 15 * time.Second}, 2<<20)
-if err != nil {
-    return err
+func saveConfig() error {
+    dir, err := oss.UserDataDir("myapp")
+    if err != nil {
+        return err
+    }
+    return oss.New(filepath.Join(dir, "config.txt"), "mode=local\n")
 }
-err = client.JSON(ctx, http.MethodGet, endpoint, nil, &result, nil)
-// 下载需要显式指定上限；失败保留已有目标文件。
-_, err = client.Download(ctx, downloadURL, filename, 100<<20)
 ```
 
-文件操作使用 `github.com/injoyai/util/oss`，保留旧 `oss.New` 的一步调用方式：
+`UserDataDir` 只返回路径，不创建目录或迁移数据；需要空目录时显式调用 `oss.New(dir)`。
 
-```go
-err := oss.New("data/logs")                            // 无内容：创建目录
-err = oss.New("data/config.txt", "hello")              // 新建文件，已有则覆盖
-err = oss.New("data/config.txt", nil)                  // 新建空文件，已有则清空
-err = oss.New("data/result.txt", "header\n", data, r)   // 拼接字符串、[]byte、io.Reader
-// 每次调用都应检查 err；reader 由调用方关闭。
-```
-
-`oss.New` 自动创建父目录（0755），文件权限固定为 0644；需要指定权限时使用 `oss.WriteFile` 或 `oss.Write`。内容写入成功后才替换目标，读取或写入失败保留原文件。传入不支持的类型会在创建目录或读取流前报错；结构化数据请显式使用 `oss.WriteJSON`。这里借鉴旧接口的使用方式，独立实现，不引入 `conv` 或其他依赖。
-
-用户数据目录可追加应用名等路径片段，目录无法确定时返回错误：
-
-```go
-dir, err := oss.UserDataDir("myapp", "data")
-if err != nil {
-    return err
-}
-err = oss.New(dir) // 需要时显式创建目录
-```
-
-| 系统 | `oss.UserDataDir()` 基础目录 |
+| 系统 | 用户数据基础目录 |
 | --- | --- |
 | macOS | `$HOME/Library/Application Support` |
 | Windows | `%LOCALAPPDATA%` |
-| Linux 及其他平台 | `$XDG_DATA_HOME`；未设置、为空或为相对路径时使用 `$HOME/.local/share` |
+| Linux 及其他平台 | 绝对路径的 `$XDG_DATA_HOME`，否则使用 `$HOME/.local/share` |
 
-路径规则参考 [Apple Application Support](https://developer.apple.com/documentation/foundation/url/applicationsupportdirectory)、[Windows LocalAppData](https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid) 和 [XDG 规范](https://specifications.freedesktop.org/basedir/0.8/)。函数只返回路径，不创建目录或迁移旧数据；`parts` 按 `filepath.Join` 拼接，不作为安全路径边界。Linux 不再返回旧版的 `/var/lib`；Windows 尊重 `%LOCALAPPDATA%`，不再硬编码用户目录下的 `AppData/Local`。基础目录缺失或非绝对路径时返回错误。
+文件默认权限为 0644，目录权限为 0755（目录权限受 umask 影响）。JSON 数据使用 `oss.WriteJSON`；自定义文件权限使用 `oss.WriteFile` 或 `oss.Write`。写入失败保留原目标，成功替换后不保留旧权限；`io.Reader` 由调用方关闭。Unix 下替换具有原子可见性，其他平台取决于 `os.Rename`，不承诺掉电持久性。路径片段按 `filepath.Join` 拼接，不限制访问范围。
 
-## 约定及限制
+### 使用带有效期的并发 Map
 
-- 参数错误通过 `error` 或 `(value, ok)` 返回；不使用 `Must*`、隐式错误吞掉或自动恢复 panic。
-- `cache.Cycle.List` 返回独立切片，但元素内的指针仍由调用方管理。`slice.Limit` 是共享视图，需要独立结果时使用 `slices.Clone`。
-- `maps.GetOrSet/GetOrSetByHandler/GetOrSetByHandler2` 返回本次选定或生成的值；即使返回前 TTL 已过期，也不会将本次结果替换成零值。过期只影响后续读取。
-- `chans.IO.Close` 解除阻塞写入并等待在途写入结束，读取端排空已接受的消息后才返回 EOF。
-- `maps/timeout.Run` 在每次超时回调前复核心跳及当前超时配置；已确认的回调仍在锁外执行，之后的 Keep 不会撤回该回调。
-- 文件缓存的值在 `Set` 时编码，在 `Get` 时解码。只有显式 `Save` 才落盘。同一实例支持并发；不同实例/进程之间无写入协调，最后保存者覆盖。
-- `oss.Write` 先写临时文件、Sync、Close，再同目录 Rename。Unix 提供原子可见性，其他平台依赖 `os.Rename` 的语义；未 Sync 父目录，不承诺掉电后的目录项持久化。替换会采用传入权限。
-- 解压默认最多 10,000 条目、1 GiB 文件正文。拒绝父路径、绝对路径、链接、特殊文件及已有文件覆盖；使用 `os.Root` 限制路径范围。tar 元数据另有流大小限制。失败会删除当前半成品文件，已成功条目保留；建议解压到独立空目录，成功后再使用。
-- HTTP 默认 JSON 正文上限 4 MiB。默认客户端超时 30 秒；自定义客户端的超时由调用方决定。下载必须指定上限。不会隐式重试 POST 等请求。
-- `ClientIP` 默认只认直接对端。只有明确列入受信代理范围时才解析 `X-Forwarded-For`，前提是代理正确追加或清洗该头。
-- Unicode 操作按码点进行，不按完整字素簇进行；组合字符和 emoji 序列可能被拆开。
-- `bytesize.Parse` 的 `KB/MB` 沿用旧项目的 1024 进制，输出统一为 `KiB/MiB`。非整数总字节数和 uint64 溢出返回错误。
-- `geo` 只处理有限坐标的简单二维多边形；边界接触与包含都算相交。绝对容差为 `1e-9` 坐标单位，不支持自相交、孔洞或布尔裁剪。
+```go
+import (
+    "fmt"
+    "time"
 
-## 验证
+    "github.com/injoyai/util/maps"
+)
 
-```sh
-go test -race -cover ./...
-go vet ./...
-go build ./...
-# 独立子模块必须单独验证，根目录的 ./... 不包含它。
-(cd sqlitets && go test -race ./...)
-(cd sqlitets && go vet ./...)
-(cd sqlitets && go build ./...)
+func useMap() {
+    m := maps.New[string, int]()
+    defer m.Close()
+
+    m.Set("count", 1, time.Minute)
+    value, exists := m.Get("count")
+    fmt.Println(value, exists) // 1 true
+}
 ```
 
-核心模块测试只使用临时文件及本机 HTTP 服务，无外部服务、凭据或第三方依赖。网络受限沙箱需要允许测试监听本机端口。Linux/Windows 可用 `GOOS=linux go build ./...` 和 `GOOS=windows go build ./...` 检查核心模块编译；跨平台编译不等于运行验证。子模块测试使用临时 SQLite 数据库，首次运行需要下载其已有驱动依赖。
+`maps` 在内存中保存原始类型值；需要持久化时，使用 `cache.NewFile` 的 `Set/Get/Save`。文件缓存只有显式 `Save` 才落盘，同一实例支持并发，不同实例或进程之间没有写入协调。
+
+`m.Close()` 停止自动清理并关闭订阅，保留已有值。`Subscribe(key, capacity)` 的通知缓冲区满时丢弃新通知，不能当作可靠消息队列。
+
+### 限制批量任务的并发数
+
+```go
+import (
+    "context"
+    "strings"
+
+    "github.com/injoyai/util/task"
+)
+
+func uppercase(ctx context.Context, inputs []string) ([]task.Result[string], error) {
+    return task.Map(ctx, inputs, 4,
+        func(ctx context.Context, input string) (string, error) {
+            if err := ctx.Err(); err != nil {
+                return "", err
+            }
+            return strings.ToUpper(input), nil
+        })
+}
+```
+
+最多同时执行 4 个任务，`results[i]` 对应 `inputs[i]`，包含 `Value` 和 `Err`；返回的汇总错误支持 `errors.Is/As`。取消后停止派发，并等待已启动任务退出，因此处理函数必须响应上下文。
+
+需要重试时用 `task.Retry`，重试次数指首次执行之外的次数。长期任务可用 `task.NewRunner` 或 `task.NewOneRun`；`Stop()` 会取消并等待退出，不得在处理函数内部调用同一实例的 `Stop()`。
+
+### 请求 JSON
+
+```go
+import (
+    "context"
+    "net/http"
+    "time"
+
+    "github.com/injoyai/util/httputil"
+)
+
+func fetchJSON(ctx context.Context, url string, dst any) error {
+    client, err := httputil.New(&http.Client{Timeout: 15 * time.Second}, 2<<20)
+    if err != nil {
+        return err
+    }
+    return client.JSON(ctx, http.MethodGet, url, nil, dst, nil)
+}
+```
+
+示例将 JSON 响应限制为 2 MiB。`httputil.New(nil, 0)` 使用 30 秒超时和 4 MiB 上限；代理、Transport 和 CookieJar 通过标准库 `http.Client` 配置。
+
+非 2xx 响应返回 `*httputil.StatusError`。下载使用 `client.Download(ctx, url, filename, maxBytes)`，必须显式指定大小上限，失败时保留已有目标文件。请求不会自动重试。
+
+### 获取设备序列号
+
+调用 `sn.Get()` 返回 `(string, error)`，成功时为 16 个大写十六进制字符，无需传参或创建本地文件。显示前缀可由应用自行添加。
+
+| 系统 | 硬件来源 |
+| --- | --- |
+| Linux | 按顺序读取 SMBIOS UUID、设备树序列号、CPU Serial、MMC CID |
+| macOS | 系统 `ioreg` 提供的 `IOPlatformUUID` |
+| Windows | 系统 PowerShell/CIM 提供的 SMBIOS UUID |
+
+读取失败、标识无效或无可用来源时返回错误。Linux 仅在某来源不存在时尝试下一项，MMC 必须恰好有一个设备；macOS 和 Windows 的外部命令有 10 秒超时，不需要安装第三方工具。
+
+硬件来源与编号不变时 SN 保持不变；更换硬件、修改固件或克隆虚拟机可能影响稳定性与唯一性，不保证跨操作系统一致或绝对唯一。当前 `sn.Get()` 与旧 `sn.Derive(key)` 生成结果不兼容，已有编号需由应用安排迁移。
+
+## SQLite 时序存储
+
+[`sqlitets`](sqlitets/README.md) 提供嵌入式 SQLite 时序存储，支持 JSON 字段、UTC 月分库、跨月查询、过滤、分页、聚合和过期清理，无需独立数据库服务。
+
+它是独立 Go 子模块，包含自己的 SQLite 驱动依赖。本地使用时需单独配置，核心模块的 `replace` 不会覆盖子模块：
+
+```sh
+go mod edit -require=github.com/injoyai/util/sqlitets@v0.0.0
+go mod edit -replace=github.com/injoyai/util/sqlitets=/absolute/path/to/util/sqlitets
+```
+
+添加 `github.com/injoyai/util/sqlitets` 和 `github.com/injoyai/util/sqlitets/sqlite` 的导入后执行 `go mod tidy`。完整示例、查询语义和资源关闭方式见[子模块使用文档](sqlitets/README.md)。
+
+## 使用注意
+
+- **切片与共享值**：`slice.Limit` 返回共享视图，需要独立切片时用 `slices.Clone`。`cache.Cycle.List` 返回独立切片，但元素内的指针仍由调用方管理；并发容器不会自动同步值所引用的对象。
+- **文本与大小单位**：Unicode 操作按码点处理，组合字符和 emoji 序列可能被拆开。`bytesize.Parse` 的 `KB/MB` 按 1024 进制解析，输出使用 `KiB/MiB`。
+- **解压**：默认最多 10,000 条目、1 GiB 文件正文，拒绝路径穿越、链接、特殊文件和覆盖已有文件。失败时已成功条目会保留，建议解压到独立空目录。
+- **客户端 IP**：`netutil.ClientIP` 默认只认直接对端；明确指定受信代理后才解析 `X-Forwarded-For`，代理必须正确追加或清洗该头。
+- **关闭通知**：`safe.Closer.Done()` 表示已发起关闭，不表示回调已完成；`CloseWithErr(nil)` 不关闭实例。`Reset()` 不等待旧资源或回调退出，需由调用方协调。
+- **几何与校验**：`geo` 只处理有限坐标的简单二维多边形，边界接触与包含均算相交，不支持孔洞、自相交或布尔裁剪。CRC 用于数据校验，不能用于身份认证；协议字节序由调用方显式编码。
+
+## API 与迁移资料
+
+在配置好模块引用的项目中，可用 `go doc github.com/injoyai/util/<包名>` 查看接口；具体方法可继续追加类型或函数名，例如 `go doc github.com/injoyai/util/oss.New`。
+
+从旧库迁入时需逐项核对 API，不能只替换导入前缀：
+
+- [goutil 迁移对照](MIGRATION.md)
+- [base 迁移对照](BASE_MIGRATION.md)
+- CRC 上游许可：[CRC-8](crc/LICENSE.crc8)、[CRC-16](crc/LICENSE.crc16)

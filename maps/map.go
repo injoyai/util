@@ -9,9 +9,13 @@ import (
 	"github.com/injoyai/util/chans"
 )
 
-func NewGeneric[K comparable, V any]() *Generic[K, V] {
+// Default 创建 key 和 value 均为 any 的独立 Map。
+func Default() *Map[any, any] { return New[any, any]() }
+
+// New 创建支持过期、原子操作和订阅的并发 Map。
+func New[K comparable, V any]() *Map[K, V] {
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Generic[K, V]{
+	e := &Map[K, V]{
 		clearCtx: ctx, clearCancel: cancel,
 		locks: make(map[K]*keyLock),
 		m:     newStorage[K, *expiryValue[V]](),
@@ -19,9 +23,9 @@ func NewGeneric[K comparable, V any]() *Generic[K, V] {
 	return e
 }
 
-// Generic 是支持过期、原子操作、快照遍历和订阅的并发 Map。
-// 必须通过 NewGeneric 创建；复制的值内部的指针由调用方负责同步。
-type Generic[K comparable, V any] struct {
+// Map 是支持过期、原子操作、快照遍历和订阅的并发 Map。
+// 必须通过 New 或 Default 创建；复制的值内部的指针由调用方负责同步。
+type Map[K comparable, V any] struct {
 	m           *storage[K, *expiryValue[V]] //接口
 	keyMu       sync.Mutex
 	locks       map[K]*keyLock
@@ -41,13 +45,13 @@ type Generic[K comparable, V any] struct {
 }
 
 // Has 是否存在
-func (this *Generic[K, V]) Has(key K) bool {
+func (this *Map[K, V]) Has(key K) bool {
 	_, has := this.Get(key)
 	return has
 }
 
 // Get 获取数据
-func (this *Generic[K, V]) Get(key K) (V, bool) {
+func (this *Map[K, V]) Get(key K) (V, bool) {
 	val, has := this.m.Get(key)
 	if has {
 		v, exist := val.Val()
@@ -59,7 +63,7 @@ func (this *Generic[K, V]) Get(key K) (V, bool) {
 	return zero, false
 }
 
-func (this *Generic[K, V]) _onGet(key K, value V, exist bool) {
+func (this *Map[K, V]) _onGet(key K, value V, exist bool) {
 	this.eventMu.RLock()
 	callbacks := this.onGet
 	this.eventMu.RUnlock()
@@ -71,13 +75,13 @@ func (this *Generic[K, V]) _onGet(key K, value V, exist bool) {
 }
 
 // Set 设置数据,可选有效期
-func (this *Generic[K, V]) Set(key K, value V, expiration ...time.Duration) {
+func (this *Map[K, V]) Set(key K, value V, expiration ...time.Duration) {
 	this.m.Set(key, newValue[V](value, expiration...))
 	//设置数据事件
 	this.notifySet(key, value)
 }
 
-func (this *Generic[K, V]) notifySet(key K, value V) {
+func (this *Map[K, V]) notifySet(key K, value V) {
 	this.eventMu.RLock()
 	callbacks := this.onSet
 	this.eventMu.RUnlock()
@@ -89,7 +93,7 @@ func (this *Generic[K, V]) notifySet(key K, value V) {
 }
 
 // SetExpiration 设置有效期
-func (this *Generic[K, V]) SetExpiration(key K, expiration time.Duration) bool {
+func (this *Map[K, V]) SetExpiration(key K, expiration time.Duration) bool {
 	val, has := this.m.Get(key)
 	if has {
 		val.SetExpiration(expiration)
@@ -98,13 +102,13 @@ func (this *Generic[K, V]) SetExpiration(key K, expiration time.Duration) bool {
 }
 
 // Del 删除键
-func (this *Generic[K, V]) Del(key K) {
+func (this *Map[K, V]) Del(key K) {
 	this.m.Del(key)
 	//删除事件
 	this.notifyDel(key)
 }
 
-func (this *Generic[K, V]) notifyDel(key K) {
+func (this *Map[K, V]) notifyDel(key K) {
 	this.eventMu.RLock()
 	callbacks := this.onDel
 	this.eventMu.RUnlock()
@@ -116,7 +120,7 @@ func (this *Generic[K, V]) notifyDel(key K) {
 }
 
 // GetAndDel 获取数据,并删除数据
-func (this *Generic[K, V]) GetAndDel(key K) (V, bool) {
+func (this *Map[K, V]) GetAndDel(key K) (V, bool) {
 	value, has := this.m.take(key)
 	var result V
 	if has {
@@ -130,7 +134,7 @@ func (this *Generic[K, V]) GetAndDel(key K) (V, bool) {
 }
 
 // GetAndSet 获取老数据,并设置新数据
-func (this *Generic[K, V]) GetAndSet(key K, value V, expiration ...time.Duration) (V, bool) {
+func (this *Map[K, V]) GetAndSet(key K, value V, expiration ...time.Duration) (V, bool) {
 	old, has := this.m.swap(key, newValue(value, expiration...))
 	var result V
 	if has {
@@ -142,7 +146,7 @@ func (this *Generic[K, V]) GetAndSet(key K, value V, expiration ...time.Duration
 }
 
 // GetOrSet 尝试获取数据,存在则返回数据,不存在的话存储传入的值,并返回出去,一般使用GetOrSetByHandler
-func (this *Generic[K, V]) GetOrSet(key K, value V, expiration ...time.Duration) (V, bool) {
+func (this *Map[K, V]) GetOrSet(key K, value V, expiration ...time.Duration) (V, bool) {
 	if value, has := this.Get(key); has {
 		return value, true
 	}
@@ -159,7 +163,7 @@ func (this *Generic[K, V]) GetOrSet(key K, value V, expiration ...time.Duration)
 // 不存在的话调用函数,生成数据,储存并返回最新数据
 // 执行函数时,增加了锁,避免并发,瞬时大量请求
 // check-lock-check
-func (this *Generic[K, V]) GetOrSetByHandler2(key K, handler func() (V, error), expiration ...time.Duration) (V, error) {
+func (this *Map[K, V]) GetOrSetByHandler2(key K, handler func() (V, error), expiration ...time.Duration) (V, error) {
 	val, has := this.Get(key)
 	if has || handler == nil {
 		return val, nil
@@ -192,7 +196,7 @@ func (this *Generic[K, V]) GetOrSetByHandler2(key K, handler func() (V, error), 
 
 // GetOrSetByHandler 接受无错误返回值的工厂，沿用 GetOrSetByHandler2 的缓存和并发语义。
 // handler 为 nil 时仅读取缓存，不存在则返回零值。
-func (this *Generic[K, V]) GetOrSetByHandler(key K, handler func() V, expiration ...time.Duration) V {
+func (this *Map[K, V]) GetOrSetByHandler(key K, handler func() V, expiration ...time.Duration) V {
 	if handler == nil {
 		value, _ := this.Get(key)
 		return value
@@ -202,7 +206,7 @@ func (this *Generic[K, V]) GetOrSetByHandler(key K, handler func() V, expiration
 }
 
 // Range 遍历数据,返回false结束遍历
-func (this *Generic[K, V]) Range(fn func(key K, value V) bool) {
+func (this *Map[K, V]) Range(fn func(key K, value V) bool) {
 	this.m.Range(func(key K, value *expiryValue[V]) bool {
 		v, valid := value.Val()
 		return !valid || fn(key, v)
@@ -210,7 +214,7 @@ func (this *Generic[K, V]) Range(fn func(key K, value V) bool) {
 }
 
 // Map 返回有效数据的独立 map[K]V 快照。
-func (this *Generic[K, V]) Map() map[K]V {
+func (this *Map[K, V]) Map() map[K]V {
 	m := map[K]V{}
 	this.Range(func(key K, value V) bool {
 		m[key] = value
@@ -220,8 +224,8 @@ func (this *Generic[K, V]) Map() map[K]V {
 }
 
 // Clone 复制数据和过期时间；不复制事件回调、订阅或自动清理任务。
-func (this *Generic[K, V]) Clone() *Generic[K, V] {
-	m := NewGeneric[K, V]()
+func (this *Map[K, V]) Clone() *Map[K, V] {
+	m := New[K, V]()
 	this.m.Range(func(key K, value *expiryValue[V]) bool {
 		m.m.Set(key, value.clone())
 		return true
@@ -230,7 +234,7 @@ func (this *Generic[K, V]) Clone() *Generic[K, V] {
 }
 
 // Clear 清除过期数据
-func (this *Generic[K, V]) Clear() {
+func (this *Map[K, V]) Clear() {
 	this.m.mu.Lock()
 	defer this.m.mu.Unlock()
 	for key, value := range this.m.m {
@@ -241,7 +245,7 @@ func (this *Generic[K, V]) Clear() {
 }
 
 // RunClear 定时清理过期数据
-func (this *Generic[K, V]) RunClear(interval time.Duration) *Generic[K, V] {
+func (this *Map[K, V]) RunClear(interval time.Duration) *Map[K, V] {
 	if interval <= 0 {
 		return this
 	}
@@ -269,26 +273,26 @@ func (this *Generic[K, V]) RunClear(interval time.Duration) *Generic[K, V] {
 	return this
 }
 
-func (this *Generic[K, V]) OnGet(f func(k K, v V, exist bool)) {
+func (this *Map[K, V]) OnGet(f func(k K, v V, exist bool)) {
 	this.eventMu.Lock()
 	defer this.eventMu.Unlock()
 	this.onGet = append(this.onGet, f)
 }
 
-func (this *Generic[K, V]) OnSet(f func(k K, v V)) {
+func (this *Map[K, V]) OnSet(f func(k K, v V)) {
 	this.eventMu.Lock()
 	defer this.eventMu.Unlock()
 	this.onSet = append(this.onSet, f)
 }
 
-func (this *Generic[K, V]) OnDel(f func(k K)) {
+func (this *Map[K, V]) OnDel(f func(k K)) {
 	this.eventMu.Lock()
 	defer this.eventMu.Unlock()
 	this.onDel = append(this.onDel, f)
 }
 
 // Subscribe 订阅指定key的数据
-func (this *Generic[K, V]) Subscribe(key K, capacity int) (*chans.Safe[V], error) {
+func (this *Map[K, V]) Subscribe(key K, capacity int) (*chans.Safe[V], error) {
 	this.subscribeOnce.Do(func() {
 		sub := chans.NewSubscribe[K, V]()
 		this.eventMu.Lock()
@@ -303,7 +307,7 @@ func (this *Generic[K, V]) Subscribe(key K, capacity int) (*chans.Safe[V], error
 }
 
 // Close stops automatic cleanup and closes subscribers.
-func (this *Generic[K, V]) Close() error {
+func (this *Map[K, V]) Close() error {
 	this.clearMu.Lock()
 	this.clearCancel()
 	this.clearMu.Unlock()
@@ -322,7 +326,7 @@ type keyLock struct {
 	users int
 }
 
-func (this *Generic[K, V]) lockKey(key K) func() {
+func (this *Map[K, V]) lockKey(key K) func() {
 	this.keyMu.Lock()
 	lock := this.locks[key]
 	if lock == nil {
